@@ -103,6 +103,18 @@ TextSlice
 
 .. autoclass:: lark.utils.TextSlice
 
+Reconstructor
+-------------
+
+`Reconstructor` generates source text from a parse tree. Passing ``source`` and
+``original_tree`` makes it edit the original text instead: only tokens whose
+values changed are replaced, and comments, whitespace and layout are kept.
+
+.. autoclass:: lark.reconstruct.Reconstructor
+    :members: reconstruct
+
+.. autoclass:: lark.exceptions.ReconstructionError
+
 ScanMatch
 ---------
 

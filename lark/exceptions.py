@@ -16,6 +16,17 @@ class ConfigurationError(LarkError, ValueError):
     pass
 
 
+class ReconstructionError(LarkError, ValueError):
+    """Raised when a source-preserving reconstruction cannot be performed.
+
+    This includes a target tree that doesn't match the original tree, tokens
+    that don't carry source positions, source text that doesn't match the
+    original token values, and output that doesn't parse back into the target
+    tree.
+    """
+    pass
+
+
 def assert_config(value, options: Collection, msg='Got %r, expected one of %s'):
     if value not in options:
         raise ConfigurationError(msg % (value, options))

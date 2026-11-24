@@ -11,3 +11,8 @@ v1.0
 - `use_accepts` in `UnexpectedInput.match_examples()` is now True by default
 
 - `v_args(meta=True)` now gives meta as the first argument. i.e. `(meta, children)`
+
+- `Reconstructor.reconstruct()` accepts `source` and `original_tree` to edit the
+  original text: only changed token values are replaced, preserving comments,
+  whitespace and layout. Structural mismatches and non-round-tripping results
+  raise `ReconstructionError`.
