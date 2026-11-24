@@ -516,7 +516,9 @@ class Lark(Serialize, Generic[_Return_T]):
     def _build_parser(self) -> "ParsingFrontend":
         self._prepare_callbacks()
         _validate_frontend_args(self.options.parser, self.options.lexer)
-        parser_conf = ParserConf(self.rules, self._callbacks, self.options.start)
+        propagate_positions = getattr(self._parse_tree_builder, 'propagate_positions_handler', None) \
+            if self.options.ambiguity != 'forest' else None
+        parser_conf = ParserConf(self.rules, self._callbacks, self.options.start, propagate_positions)
         return _construct_parsing_frontend(
             self.options.parser,
             self.options.lexer,

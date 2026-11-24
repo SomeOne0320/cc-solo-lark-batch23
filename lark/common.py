@@ -77,10 +77,13 @@ class ParserConf(Serialize):
     start: List[str]
     parser_type: _ParserArgType
 
-    def __init__(self, rules: List['Rule'], callbacks: ParserCallbacks, start: List[str]):
+    def __init__(self, rules: List['Rule'], callbacks: ParserCallbacks, start: List[str], propagate_positions: Optional[Callable] = None):
         assert isinstance(start, list)
         self.rules = rules
         self.callbacks = callbacks
         self.start = start
+        # A position-propagation handler shared with the parser (Earley only).
+        # Not serialized; it is re-created when the parser is built.
+        self.propagate_positions = propagate_positions
 
 ###}

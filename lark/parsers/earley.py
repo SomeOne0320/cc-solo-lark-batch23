@@ -31,7 +31,8 @@ class Parser:
 
     def __init__(self, lexer_conf: 'LexerConf', parser_conf: 'ParserConf', term_matcher: Callable,
                  resolve_ambiguity: bool=True, debug: bool=False,
-                 tree_class: Optional[Callable[[str, List], Any]]=Tree, ordered_sets: bool=True):
+                 tree_class: Optional[Callable[[str, List], Any]]=Tree, ordered_sets: bool=True,
+                 propagate_positions: Optional[Any]=None):
         analysis = GrammarAnalyzer(parser_conf)
         self.lexer_conf = lexer_conf
         self.parser_conf = parser_conf
@@ -40,6 +41,9 @@ class Parser:
         self.Tree = tree_class
         self.Set = OrderedSet if ordered_sets else set
         self.SymbolNode = StableSymbolNode if ordered_sets else SymbolNode
+        # Handler created by the regular parse-tree builder; ``None`` when
+        # position propagation is disabled or no tree is being constructed.
+        self.propagate_positions: Optional[Any] = propagate_positions if propagate_positions is not None else getattr(parser_conf, 'propagate_positions', None)
 
         self.FIRST = analysis.FIRST
         self.NULLABLE = analysis.NULLABLE
@@ -305,7 +309,8 @@ class Parser:
             # Disable the ForestToParseTree cache when ambiguity='resolve'
             # to prevent a tree construction bug. See issue #1283
             use_cache = not self.resolve_ambiguity
-            transformer = ForestToParseTree(self.Tree, self.callbacks, self.forest_sum_visitor and self.forest_sum_visitor(), self.resolve_ambiguity, use_cache)
+            transformer = ForestToParseTree(self.Tree, self.callbacks, self.forest_sum_visitor and self.forest_sum_visitor(),
+                                            self.resolve_ambiguity, use_cache, self.propagate_positions)
             return transformer.transform(solution)
 
         # return the root of the SPPF

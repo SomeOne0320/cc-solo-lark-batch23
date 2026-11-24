@@ -1,4 +1,13 @@
-v1.0
+# Unreleased
+
+- Earley parser: when `propagate_positions` is enabled, explicit ambiguity nodes
+  (`_ambig`/`_iambig`, and their `_inter` children) now cover the source text
+  occupied by their alternative derivations, instead of carrying no position.
+  Parent rules include that range when computing their own, including for
+  nested ambiguities and inlined rules. Disabling position propagation, or using
+  a custom tree type, keeps the previous interface.
+
+# v1.0
 
 - `maybe_placeholders` is now True by default
 

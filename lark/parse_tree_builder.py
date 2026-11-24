@@ -1,6 +1,6 @@
 """Provides functions for the automatic building and shaping of the parse-tree."""
 
-from typing import List
+from typing import Any, List
 
 from .exceptions import GrammarError, ConfigurationError
 from .lexer import Token
@@ -32,41 +32,49 @@ class PropagatePositions:
 
     def __call__(self, children):
         res = self.node_builder(children)
-
-        if isinstance(res, Tree):
-            # Calculate positions while the tree is streaming, according to the rule:
-            # - nodes start at the start of their first child's container,
-            #   and end at the end of their last child's container.
-            # Containers are nodes that take up space in text, but have been inlined in the tree.
-
-            res_meta = res.meta
-
-            first_meta = self._pp_get_meta(children)
-            if first_meta is not None:
-                if not hasattr(res_meta, 'line'):
-                    # meta was already set, probably because the rule has been inlined (e.g. `?rule`)
-                    res_meta.line = getattr(first_meta, 'container_line', first_meta.line)
-                    res_meta.column = getattr(first_meta, 'container_column', first_meta.column)
-                    res_meta.start_pos = getattr(first_meta, 'container_start_pos', first_meta.start_pos)
-                    res_meta.empty = False
-
-                res_meta.container_line = getattr(first_meta, 'container_line', first_meta.line)
-                res_meta.container_column = getattr(first_meta, 'container_column', first_meta.column)
-                res_meta.container_start_pos = getattr(first_meta, 'container_start_pos', first_meta.start_pos)
-
-            last_meta = self._pp_get_meta(reversed(children))
-            if last_meta is not None:
-                if not hasattr(res_meta, 'end_line'):
-                    res_meta.end_line = getattr(last_meta, 'container_end_line', last_meta.end_line)
-                    res_meta.end_column = getattr(last_meta, 'container_end_column', last_meta.end_column)
-                    res_meta.end_pos = getattr(last_meta, 'container_end_pos', last_meta.end_pos)
-                    res_meta.empty = False
-
-                res_meta.container_end_line = getattr(last_meta, 'container_end_line', last_meta.end_line)
-                res_meta.container_end_column = getattr(last_meta, 'container_end_column', last_meta.end_column)
-                res_meta.container_end_pos = getattr(last_meta, 'container_end_pos', last_meta.end_pos)
-
+        self.propagate(res, children)
         return res
+
+    def propagate(self, res, children=None):
+        """Calculate and assign the positions of an already-built tree,
+        based on the positions of its children.
+
+        Used for synthetic trees that are assembled outside of the regular
+        rule callbacks, such as the '_ambig' and '_iambig' nodes produced by
+        the Earley parser when ambiguity is kept explicit.
+        """
+        if not isinstance(res, Tree):
+            return
+
+        if children is None:
+            children = res.children
+
+        res_meta = res.meta
+
+        first_meta = self._pp_get_meta(children)
+        if first_meta is not None:
+            if not hasattr(res_meta, 'line'):
+                # meta was already set, probably because the rule has been inlined (e.g. `?rule`)
+                res_meta.line = getattr(first_meta, 'container_line', first_meta.line)
+                res_meta.column = getattr(first_meta, 'container_column', first_meta.column)
+                res_meta.start_pos = getattr(first_meta, 'container_start_pos', first_meta.start_pos)
+                res_meta.empty = False
+
+            res_meta.container_line = getattr(first_meta, 'container_line', first_meta.line)
+            res_meta.container_column = getattr(first_meta, 'container_column', first_meta.column)
+            res_meta.container_start_pos = getattr(first_meta, 'container_start_pos', first_meta.start_pos)
+
+        last_meta = self._pp_get_meta(reversed(children))
+        if last_meta is not None:
+            if not hasattr(res_meta, 'end_line'):
+                res_meta.end_line = getattr(last_meta, 'container_end_line', last_meta.end_line)
+                res_meta.end_column = getattr(last_meta, 'container_end_column', last_meta.end_column)
+                res_meta.end_pos = getattr(last_meta, 'container_end_pos', last_meta.end_pos)
+                res_meta.empty = False
+
+            res_meta.container_end_line = getattr(last_meta, 'container_end_line', last_meta.end_line)
+            res_meta.container_end_column = getattr(last_meta, 'container_end_column', last_meta.end_column)
+            res_meta.container_end_pos = getattr(last_meta, 'container_end_pos', last_meta.end_pos)
 
     def _pp_get_meta(self, children):
         for c in children:
@@ -192,10 +200,11 @@ class AmbiguousExpander:
        are ambiguous. i.e. (parent->_ambig->_expand_this_rule). In this case, make the parent itself
        ambiguous with as many copies as there are ambiguous children, and then copy the ambiguous children
        into the right parents in the right places, essentially shifting the ambiguity up the tree."""
-    def __init__(self, to_expand, tree_class, node_builder):
+    def __init__(self, to_expand, tree_class, node_builder, propagate_positions=None):
         self.node_builder = node_builder
         self.tree_class = tree_class
         self.to_expand = to_expand
+        self.propagate_positions: Any = propagate_positions
 
     def __call__(self, children):
         def _is_ambig_tree(t):
@@ -217,14 +226,17 @@ class AmbiguousExpander:
             return self.node_builder(children)
 
         expand = [child.children if i in ambiguous else (child,) for i, child in enumerate(children)]
-        return self.tree_class('_ambig', [self.node_builder(list(f)) for f in product(*expand)])
+        ambig = self.tree_class('_ambig', [self.node_builder(list(f)) for f in product(*expand)])
+        if self.propagate_positions is not None:
+            self.propagate_positions.propagate(ambig)
+        return ambig
 
 
-def maybe_create_ambiguous_expander(tree_class, expansion, keep_all_tokens):
+def maybe_create_ambiguous_expander(tree_class, expansion, keep_all_tokens, propagate_positions=None):
     to_expand = [i for i, sym in enumerate(expansion)
                  if keep_all_tokens or ((not (sym.is_term and sym.filter_out)) and _should_expand(sym))]
     if to_expand:
-        return partial(AmbiguousExpander, to_expand, tree_class)
+        return partial(AmbiguousExpander, to_expand, tree_class, propagate_positions=propagate_positions)
 
 
 class AmbiguousIntermediateExpander:
@@ -268,9 +280,10 @@ class AmbiguousIntermediateExpander:
     propagating up any nested '_iambig' nodes along the way.
     """
 
-    def __init__(self, tree_class, node_builder):
+    def __init__(self, tree_class, node_builder, propagate_positions=None):
         self.node_builder = node_builder
         self.tree_class = tree_class
+        self.propagate_positions: Any = propagate_positions
 
     def __call__(self, children):
         def _is_iambig_tree(child):
@@ -303,7 +316,10 @@ class AmbiguousIntermediateExpander:
         collapsed = _collapse_iambig(children)
         if collapsed:
             processed_nodes = [self.node_builder(c.children) for c in collapsed]
-            return self.tree_class('_ambig', processed_nodes)
+            ambig = self.tree_class('_ambig', processed_nodes)
+            if self.propagate_positions is not None:
+                self.propagate_positions.propagate(ambig)
+            return ambig
 
         return self.node_builder(children)
 
@@ -339,6 +355,7 @@ class ParseTreeBuilder:
 
     def _init_builders(self, rules):
         propagate_positions = make_propagate_positions(self.propagate_positions)
+        self._propagate_positions = propagate_positions
 
         for rule in rules:
             options = rule.options
@@ -349,11 +366,27 @@ class ParseTreeBuilder:
                 (expand_single_child and not rule.alias) and ExpandSingleChild,
                 maybe_create_child_filter(rule.expansion, keep_all_tokens, self.ambiguous, options.empty_indices if self.maybe_placeholders else None),
                 propagate_positions,
-                self.ambiguous and maybe_create_ambiguous_expander(self.tree_class, rule.expansion, keep_all_tokens),
-                self.ambiguous and partial(AmbiguousIntermediateExpander, self.tree_class)
+                self.ambiguous and maybe_create_ambiguous_expander(self.tree_class, rule.expansion, keep_all_tokens, self.propagate_positions_handler),
+                self.ambiguous and partial(AmbiguousIntermediateExpander, self.tree_class, propagate_positions=self.propagate_positions_handler)
             ]))
 
             yield rule, wrapper_chain
+
+    @property
+    def propagate_positions_handler(self):
+        """A shared handler that fills in the positions of an already-built tree.
+
+        Returns ``None`` when position propagation is disabled. The Earley
+        parser uses it to assign positions to synthetic ambiguity nodes
+        ('_ambig'/'_iambig') that are assembled outside of the rule callbacks.
+        """
+        if self._propagate_positions is None:
+            return None
+        if not hasattr(self, '_propagate_positions_handler'):
+            # The node builder is irrelevant when only ``propagate`` is used,
+            # since the trees are constructed before the handler is called.
+            self._propagate_positions_handler = self._propagate_positions(None)
+        return self._propagate_positions_handler
 
     def create_callback(self, transformer=None):
         callbacks = {}

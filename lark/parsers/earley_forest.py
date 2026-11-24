@@ -7,7 +7,7 @@ Full reference and more details is here:
 https://web.archive.org/web/20190616123959/http://www.bramvandersanden.com/post/2014/06/shared-packed-parse-forest/
 """
 
-from typing import Type, AbstractSet
+from typing import Any, Type, AbstractSet
 from random import randint
 from collections import deque
 from operator import attrgetter
@@ -509,9 +509,15 @@ class ForestToParseTree(ForestTransformer):
         resolve_ambiguity: If True, ambiguities will be resolved based on
                         priorities. Otherwise, `_ambig` nodes will be in the resulting tree.
         use_cache: If True, the results of packed node transformations will be cached.
+        propagate_positions: An optional handler with a ``propagate(tree, children=None)``
+                        method, used to calculate the positions of the synthetic
+                        '_ambig' and '_iambig' nodes from the text actually covered
+                        by their alternative derivations. When ``None`` (the default),
+                        no positions are assigned and the resulting interface is
+                        identical to the historical one.
     """
 
-    def __init__(self, tree_class=Tree, callbacks=dict(), prioritizer=ForestSumVisitor(), resolve_ambiguity=True, use_cache=True):
+    def __init__(self, tree_class=Tree, callbacks=dict(), prioritizer=ForestSumVisitor(), resolve_ambiguity=True, use_cache=True, propagate_positions=None):
         super(ForestToParseTree, self).__init__()
         self.tree_class = tree_class
         self.callbacks = callbacks
@@ -522,6 +528,11 @@ class ForestToParseTree(ForestTransformer):
         self._on_cycle_retreat = False
         self._cycle_node = None
         self._successful_visits = set()
+        self.propagate_positions: Any = propagate_positions
+
+    def _propagate_positions(self, tree):
+        if self.propagate_positions is not None:
+            self.propagate_positions.propagate(tree)
 
     def visit(self, root):
         if self.prioritizer:
@@ -564,7 +575,11 @@ class ForestToParseTree(ForestTransformer):
         # data is a list of trees where each tree's data is
         # equal to the name of the symbol or one of its aliases.
         if len(data) > 1:
-            return self.tree_class('_ambig', data)
+            tree = self.tree_class('_ambig', data)
+            # The ambiguity node wraps every alternative derivation, so it
+            # covers the same substring as they do.
+            self._propagate_positions(tree)
+            return tree
         elif data:
             return data[0]
         return Discard
@@ -588,7 +603,11 @@ class ForestToParseTree(ForestTransformer):
         self._successful_visits.remove(id(node))
         if len(data) > 1:
             children = [self.tree_class('_inter', c) for c in data]
-            return self.tree_class('_iambig', children)
+            for inter in children:
+                self._propagate_positions(inter)
+            tree = self.tree_class('_iambig', children)
+            self._propagate_positions(tree)
+            return tree
         return data[0]
 
     def transform_packed_node(self, node, data):

@@ -851,6 +851,151 @@ def _make_full_earley_test(LEXER):
             self.assertEqual(tree.data, expected.data)
             self.assertEqual(set(tree.children), set(expected.children))
 
+        @unittest.skipIf(LEXER=='basic', "Requires dynamic lexer")
+        def test_ambiguity_propagate_positions(self):
+            # The same phrase matches two different rules. With explicit
+            # ambiguity, the synthetic '_ambig' node (and every parent above
+            # it) must cover the text occupied by its alternative derivations.
+            grammar = """
+            start: noun verb noun        -> simple
+                    | noun verb "like" noun -> comparative
+
+            noun: adj? NOUN
+            verb: VERB
+            adj: ADJ
+
+            NOUN: "flies" | "bananas" | "fruit"
+            VERB: "like" | "flies"
+            ADJ: "fruit"
+
+            %import common.WS
+            %ignore WS
+            """
+            text = 'fruit flies like bananas'
+            parser = Lark(grammar, ambiguity='explicit', lexer=LEXER, propagate_positions=True)
+            tree = parser.parse(text)
+
+            self.assertEqual(tree.data, '_ambig')
+            # The ambiguity node spans the whole input, matching each alternative.
+            self.assertEqual((tree.meta.start_pos, tree.meta.end_pos), (0, len(text)))
+            self.assertEqual(text[tree.meta.start_pos:tree.meta.end_pos], text)
+            # And the container range follows the same span.
+            self.assertEqual((tree.meta.container_start_pos, tree.meta.container_end_pos),
+                             (tree.meta.start_pos, tree.meta.end_pos))
+            self.assertFalse(tree.meta.empty)
+
+            for alternative in tree.children:
+                self.assertEqual((alternative.meta.start_pos, alternative.meta.end_pos), (0, len(text)))
+                # Every non-empty node in an alternative points inside the input.
+                for subtree in alternative.iter_subtrees():
+                    if not subtree.meta.empty:
+                        self.assertGreaterEqual(subtree.meta.start_pos, 0)
+                        self.assertLessEqual(subtree.meta.end_pos, len(text))
+                        self.assertLessEqual(subtree.meta.start_pos, subtree.meta.end_pos)
+
+        def test_ambiguity_propagate_positions_nested(self):
+            # Nested ambiguous intermediate nodes: the flattened '_ambig'
+            # node must cover the alternatives' actual text, including when
+            # some derivations contain empty matches.
+            grammar = """
+            start: ab bc cd
+            !ab: "A" "B"?
+            !bc: "B"? "C"?
+            !cd: "C"? "D"
+            """
+            text = "ABCD"
+            l = Lark(grammar, parser='earley', ambiguity='explicit', lexer=LEXER,
+                     propagate_positions=True)
+            tree = l.parse(text)
+
+            self.assertEqual(tree.data, '_ambig')
+            self.assertEqual((tree.meta.start_pos, tree.meta.end_pos), (0, len(text)))
+            self.assertEqual(text[tree.meta.start_pos:tree.meta.end_pos], text)
+            for alternative in tree.children:
+                self.assertEqual(alternative.data, 'start')
+                self.assertEqual((alternative.meta.start_pos, alternative.meta.end_pos),
+                                 (0, len(text)))
+
+        def test_ambiguity_propagate_positions_inlined_rule(self):
+            # An inlined ambiguous rule pushes the ambiguity up via an
+            # AmbiguousExpander-built '_ambig' node; it must still cover the
+            # full input, honoring the inlining container rules.
+            grammar = """
+            start: _field+
+            _field: f1 | f2 | f3
+            f1: INT
+            f2: INT "M"?
+            f3: INT "M"
+            %import common.INT
+            %ignore " "
+            """
+            text = "1M 2"
+            l = Lark(grammar, parser='earley', ambiguity='explicit', lexer=LEXER,
+                     propagate_positions=True)
+            tree = l.parse(text)
+
+            self.assertEqual(tree.data, '_ambig')
+            self.assertEqual((tree.meta.start_pos, tree.meta.end_pos), (0, len(text)))
+            self.assertEqual(text[tree.meta.start_pos:tree.meta.end_pos], text)
+            for alternative in tree.children:
+                self.assertEqual((alternative.meta.start_pos, alternative.meta.end_pos),
+                                 (0, len(text)))
+
+        def test_ambiguity_propagate_positions_disabled(self):
+            # With position propagation off, synthetic ambiguity nodes keep
+            # the historical (empty) meta interface.
+            grammar = """
+            start: ab bc cd
+            !ab: "A" "B"?
+            !bc: "B"? "C"?
+            !cd: "C"? "D"
+            """
+            l = Lark(grammar, parser='earley', ambiguity='explicit', lexer=LEXER,
+                     propagate_positions=False)
+            tree = l.parse("ABCD")
+            for subtree in tree.iter_subtrees():
+                self.assertTrue(subtree.meta.empty)
+                self.assertFalse(hasattr(subtree.meta, 'start_pos'))
+                self.assertFalse(hasattr(subtree.meta, 'end_pos'))
+
+        def test_ambiguity_propagate_positions_filter(self):
+            # A custom position filter must be applied to the synthetic
+            # ambiguity nodes exactly as it is to regular rule nodes.
+            grammar = """
+            start: ab bc cd
+            !ab: "A" "B"?
+            !bc: "B"? "C"?
+            !cd: "C"? "D"
+            """
+            def no_d_tokens(node):
+                return not (isinstance(node, Token) and node.type == 'D')
+
+            l = Lark(grammar, parser='earley', ambiguity='explicit', lexer=LEXER,
+                     propagate_positions=no_d_tokens)
+            tree = l.parse("ABCD")
+            self.assertEqual(tree.data, '_ambig')
+            # 'D' is filtered out, so the range ends at 'C' (offset 3).
+            self.assertEqual((tree.meta.start_pos, tree.meta.end_pos), (0, 3))
+            self.assertEqual((tree.meta.container_start_pos, tree.meta.container_end_pos),
+                             (0, 3))
+
+        def test_ambiguity_propagate_positions_multiline(self):
+            grammar = """
+            start: ab bc cd
+            !ab: "A" "B"?
+            !bc: "B"? "C"?
+            !cd: "C"? "D"
+            %ignore "\\n"
+            """
+            text = "AB\nCD"
+            l = Lark(grammar, parser='earley', ambiguity='explicit', lexer=LEXER,
+                     propagate_positions=True)
+            tree = l.parse(text)
+            self.assertEqual(tree.data, '_ambig')
+            self.assertEqual((tree.meta.line, tree.meta.column), (1, 1))
+            self.assertEqual((tree.meta.end_line, tree.meta.end_column), (2, 3))
+            self.assertEqual(text[tree.meta.start_pos:tree.meta.end_pos], text)
+
 
         @unittest.skipIf(LEXER!='dynamic_complete', "Only relevant for the dynamic_complete parser")
         def test_explicit_ambiguity2(self):
