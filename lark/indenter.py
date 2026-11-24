@@ -51,6 +51,10 @@ class Indenter(PostLex, ABC):
                 raise DedentError('Unexpected dedent to column %s. Expected dedent to %s' % (indent, self.indent_level[-1]))
 
     def _process(self, stream):
+        # Operates on ``self.paren_level`` / ``self.indent_level`` directly, so
+        # that subclasses overriding ``handle_NL`` see and update the state of
+        # the stream currently being processed. ``process()`` takes care of
+        # swapping the right, per-stream state onto ``self`` before every step.
         token = None
         for token in stream:
             if token.type == self.NL_type:
@@ -71,9 +75,38 @@ class Indenter(PostLex, ABC):
         assert self.indent_level == [0], self.indent_level
 
     def process(self, stream):
-        self.paren_level = 0
-        self.indent_level = [0]
-        return self._process(stream)
+        # Every call gets a private parenthesis depth and indentation stack.
+        # This makes it safe to drive several streams through the same Indenter
+        # instance in parallel (the generators are lazy): pausing or closing
+        # one stream, or raising an indentation error in it, can never affect
+        # the results of any other stream.
+        local_paren_level = 0
+        local_indent_level = [0]
+        inner = self._process(stream)
+        while True:
+            # Swap this stream's state onto ``self`` while its own code (and any
+            # ``handle_NL`` override) is running, and restore the previous state
+            # whenever the generator yields control back to its caller.
+            saved_paren_level = self.paren_level
+            saved_indent_level = self.indent_level
+            self.paren_level = local_paren_level
+            self.indent_level = local_indent_level
+            try:
+                token = next(inner)
+            except StopIteration:
+                self.paren_level = saved_paren_level
+                self.indent_level = saved_indent_level
+                return
+            except BaseException:
+                self.paren_level = saved_paren_level
+                self.indent_level = saved_indent_level
+                raise
+            else:
+                local_paren_level = self.paren_level
+                local_indent_level = self.indent_level
+                self.paren_level = saved_paren_level
+                self.indent_level = saved_indent_level
+                yield token
 
     # XXX Hack for ContextualLexer. Maybe there's a more elegant solution?
     @property
